@@ -23,22 +23,45 @@ export function OrderEntryScreen() {
   const router = useRouter();
   if (!po) return null;
 
+  const headerComplete = po.po_number.trim() !== "" && po.requested_delivery_date.trim() !== "";
   const ready = allLinesReady(lines);
   const set = (line_no: number, field: keyof WorkingLine, value: string) =>
     dispatch({ type: "SET_FIELD", line_no, field, value });
+  const setPo = (field: "po_number" | "requested_delivery_date", value: string) =>
+    dispatch({ type: "SET_PO_FIELD", field, value });
 
   return (
     <div className="mx-auto max-w-5xl space-y-3">
-      {/* PO header band */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border border-[var(--sap-grid-line)] bg-[var(--sap-header)] px-4 py-2 text-[12px]">
-        <span className="font-semibold text-slate-800">Nákupní objednávka</span>
-        <span className="font-mono text-slate-700">{po.po_number}</span>
-        <span className="text-slate-500">Dodavatel:</span>
-        <span className="text-slate-700">{po.supplier}</span>
-        <span className="text-slate-500">Zákazník:</span>
-        <span className="text-slate-700">{po.customer}</span>
-        <span className="text-slate-500">Dodání:</span>
-        <span className="text-slate-700">{po.requested_delivery_date}</span>
+      {/* PO header — number + delivery date are mandatory before adding rows */}
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-2 border border-[var(--sap-grid-line)] bg-[var(--sap-header)] px-4 py-2 text-[12px]">
+        <label className="flex flex-col">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Nákupní objednávka *</span>
+          <input
+            data-testid="po-number"
+            value={po.po_number}
+            onChange={(e) => setPo("po_number", e.target.value)}
+            placeholder="NO-540-26-…"
+            className="sap-input w-44 font-mono"
+          />
+        </label>
+        <div className="flex flex-col">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Dodavatel</span>
+          <span className="py-1 text-slate-700">{po.supplier}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Zákazník</span>
+          <span className="py-1 text-slate-700">{po.customer}</span>
+        </div>
+        <label className="flex flex-col">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Dodání *</span>
+          <input
+            type="date"
+            data-testid="po-date"
+            value={po.requested_delivery_date}
+            onChange={(e) => setPo("requested_delivery_date", e.target.value)}
+            className="sap-input w-40"
+          />
+        </label>
       </div>
 
       {/* Line-item grid */}
@@ -60,7 +83,9 @@ export function OrderEntryScreen() {
             {lines.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-3 py-8 text-center text-[12px] italic text-slate-400">
-                  Zatím žádné řádky. Přidejte řádek a opište položku z PDF objednávky.
+                  {headerComplete
+                    ? "Zatím žádné řádky. Přidejte řádek a opište položku z PDF objednávky."
+                    : "Nejprve vyplňte číslo objednávky a datum dodání, poté přidávejte řádky."}
                 </td>
               </tr>
             )}
@@ -131,14 +156,24 @@ export function OrderEntryScreen() {
         </table>
       </div>
 
-      {/* Add row */}
-      <button
-        data-testid="add-line"
-        onClick={() => dispatch({ type: "ADD_LINE" })}
-        className="rounded-sm border border-dashed border-slate-400 px-3 py-1.5 text-[12px] font-medium text-slate-700 transition hover:bg-slate-50"
-      >
-        ➕ Přidat řádek
-      </button>
+      {/* Add row — gated on the mandatory header */}
+      <div className="flex items-center gap-2">
+        <button
+          data-testid="add-line"
+          onClick={() => dispatch({ type: "ADD_LINE" })}
+          disabled={!headerComplete}
+          className={`rounded-sm border border-dashed px-3 py-1.5 text-[12px] font-medium transition ${
+            headerComplete
+              ? "border-slate-400 text-slate-700 hover:bg-slate-50"
+              : "cursor-not-allowed border-slate-200 text-slate-400"
+          }`}
+        >
+          ➕ Přidat řádek
+        </button>
+        {!headerComplete && (
+          <span className="text-[11px] text-amber-700">Nejprve vyplňte číslo objednávky a datum dodání.</span>
+        )}
+      </div>
 
       {/* Hint */}
       <p className="text-[11px] text-slate-500">
@@ -147,7 +182,7 @@ export function OrderEntryScreen() {
         nebo <span className="font-medium text-amber-700">není skladem</span> (doplní se v SAP později).
       </p>
 
-      {/* Completion */}
+      {/* Completion → straight to processed orders */}
       <div className="flex items-center justify-between border border-[var(--sap-grid-line)] bg-white px-4 py-3">
         <span className="text-[12px] text-slate-600">
           {lines.length === 0
@@ -161,7 +196,7 @@ export function OrderEntryScreen() {
           disabled={!ready}
           onClick={() => {
             dispatch({ type: "COMPLETE_ORDER" });
-            router.push("/completion");
+            router.push("/processed-orders");
           }}
           className={`rounded-sm px-5 py-2 text-[13px] font-semibold text-white transition ${
             ready ? "bg-[var(--duvo-accent)] hover:brightness-110" : "cursor-not-allowed bg-slate-300"

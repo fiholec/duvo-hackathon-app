@@ -14,7 +14,6 @@ import {
   getPoLines,
   findMaterial,
   generateRandomPo,
-  purchaseOrders,
 } from "./mockData";
 import { evaluateLine, isBlocking, type CheckResult } from "./checks";
 import { loadPersisted, savePersisted } from "./persistence";
@@ -74,6 +73,7 @@ type Action =
   | { type: "HYDRATE"; processedOrders: ProcessedOrderRecord[]; auditLog: AuditEvent[] }
   | { type: "LOAD_PO"; poNumber: string }
   | { type: "LOAD_RANDOM" }
+  | { type: "SET_PO_FIELD"; field: "po_number" | "requested_delivery_date"; value: string }
   | { type: "ADD_LINE" }
   | { type: "DELETE_LINE"; line_no: number }
   | { type: "SET_FIELD"; line_no: number; field: keyof WorkingLine; value: string }
@@ -104,9 +104,18 @@ function toWorkingLines(lines: PoLine[]): WorkingLine[] {
   }));
 }
 
+/** A fresh, empty purchase order — the operator fills the number + date by hand. */
+const EMPTY_PO: PurchaseOrder = {
+  po_number: "",
+  supplier: "Hilti ČR spol. s r.o.",
+  customer: "Stavebniny DEK a.s.",
+  requested_delivery_date: "",
+  status: "received",
+};
+
 const initialState: State = {
   actor: "operator",
-  po: purchaseOrders[0],
+  po: EMPTY_PO,
   lines: [], // start empty — operator adds rows manually from the PDF
   validationLog: [],
   actionLog: [],
@@ -207,7 +216,14 @@ function reducer(state: State, action: Action & Meta): State {
       };
     }
 
+    case "SET_PO_FIELD":
+      return state.po ? { ...state, po: { ...state.po, [action.field]: action.value } } : state;
+
     case "ADD_LINE": {
+      // Mandatory: PO number + delivery date must be filled before any row is added.
+      if (!state.po || !state.po.po_number.trim() || !state.po.requested_delivery_date.trim()) {
+        return state;
+      }
       const nextNo = state.lines.length
         ? Math.max(...state.lines.map((l) => l.line_no)) + 10
         : 10;
@@ -348,9 +364,12 @@ function reducer(state: State, action: Action & Meta): State {
       };
       return {
         ...state,
-        po,
+        // Record the order, then reset the working form for the next one.
+        po: EMPTY_PO,
+        lines: [],
+        validationLog: [],
+        actionLog: [],
         processedOrders: [record, ...state.processedOrders.filter((p) => p.po_number !== po.po_number)],
-        actionLog: withAction(state, ts, "system", `Objednávka ${po.po_number} dokončena v SAP.`),
         auditLog: withAudit(state, ts, actor, "order_completed", null, `Objednávka ${po.po_number} dokončena v SAP (${state.lines.length} pozic).`),
       };
     }
