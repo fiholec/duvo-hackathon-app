@@ -1,14 +1,8 @@
-// Thin, "SQL-backed" check functions + the outcome -> status-bar message map.
-// These mirror PRD §7 and §10. Logic stays dumb; the UI just wires it.
+// Validation checks — backed by the LIVE Supabase catalogue (loaded via /api/catalog
+// into src/lib/catalog.ts). There is no stock table in the DB, so "valid" means the
+// article + warehouse are recognised and the quantity is sane — no IN_STOCK/OUT_OF_STOCK.
 
-import {
-  findMaterial,
-  findUomConversion,
-  findStorageLocation,
-  findStock,
-  isKnownWarehouse,
-  stockAvailability,
-} from "./mockData";
+import { findProduct, findSuccessor, isKnownWarehouse, isCatalogLoaded } from "./catalog";
 import type { LightColor, ValidationOutcome } from "./types";
 
 export interface CheckResult {
@@ -16,106 +10,59 @@ export interface CheckResult {
   light: LightColor;
   message: string; // status-bar text (Czech, SAP-style)
   successor?: string | null;
-  available?: number;
 }
 
-// ── Article check (Chyba v artiklu) ──────────────────────────────────────────
+// ── Article check — against products / product_successors ─────────────────────
 export function checkMaterial(materialNumber: string): CheckResult {
-  const m = findMaterial(materialNumber);
-  if (!m) {
+  const mn = materialNumber.trim();
+  if (!mn) {
+    return { outcome: "ARTICLE_NOT_FOUND", light: "red", message: "Zadejte číslo materiálu." };
+  }
+  const successor = findSuccessor(mn);
+  if (successor) {
     return {
-      outcome: "ARTICLE_NOT_FOUND",
-      light: "red",
-      message: `Materiál ${materialNumber} neexistuje – ověřte s DEK.`,
+      outcome: "SUCCESSOR",
+      light: "amber",
+      message: `Materiál ${mn} ukončen – nástupce ${successor}; oznamte DEK.`,
+      successor,
     };
   }
-  if (m.status !== "active") {
-    if (m.successor_material_number) {
-      return {
-        outcome: "SUCCESSOR",
-        light: "amber",
-        message: `Materiál ${materialNumber} ukončen – nástupce ${m.successor_material_number}; oznamte DEK.`,
-        successor: m.successor_material_number,
-      };
-    }
-    return {
-      outcome: "ARTICLE_NOT_FOUND",
-      light: "red",
-      message: `Materiál ${materialNumber} blokován bez nástupce – ověřte s DEK.`,
-    };
+  const product = findProduct(mn);
+  if (product) {
+    return { outcome: "OK", light: "neutral", message: `Materiál ${mn} – ${product.description}.` };
   }
-  return { outcome: "OK", light: "neutral", message: `Materiál ${materialNumber} – ${m.description}.` };
+  return { outcome: "ARTICLE_NOT_FOUND", light: "red", message: `Materiál ${mn} neexistuje v katalogu – ověřte s DEK.` };
 }
 
-// ── Quantity check (Chyba v množství) ─────────────────────────────────────────
-export function checkQty(materialNumber: string, qty: number, uom: string): CheckResult {
+// ── Quantity check ────────────────────────────────────────────────────────────
+export function checkQty(qty: number, uom: string): CheckResult {
   const okQty = Number.isFinite(qty) && qty > 0 && Number.isInteger(qty);
-  const conv = findUomConversion(materialNumber, uom);
-  if (!okQty || conv === null) {
+  if (!okQty) {
     return {
       outcome: "QTY_ERROR",
       light: "amber",
-      message: `Neplatné množství ${qty} ${uom} – ověřte s DEK.`,
+      message: `Neplatné množství ${Number.isNaN(qty) ? "" : qty} ${uom} – ověřte s DEK.`,
     };
   }
   return { outcome: "OK", light: "neutral", message: `Množství ${qty} ${uom} v pořádku.` };
 }
 
-// ── Warehouse check (Chyba v cílovém skladu) ──────────────────────────────────
-// Číslo skladu je proměnná z objednávky/DB. Nejprve ho ověříme proti kmenovým
-// datům skladů firmy, poté zkontrolujeme, že je tam materiál veden.
-export function checkWarehouse(materialNumber: string, sklad: string): CheckResult {
-  if (!isKnownWarehouse(sklad)) {
+// ── Warehouse check — against customer_delivery_locations ─────────────────────
+export function checkWarehouse(sklad: string): CheckResult {
+  const w = sklad.trim();
+  if (!isKnownWarehouse(w)) {
     return {
       outcome: "WAREHOUSE_ERROR",
       light: "red",
-      message: `Sklad ${sklad} není platným skladem firmy – ověřte s DEK.`,
+      message: `Sklad ${w || "—"} neexistuje v databázi – ověřte s DEK.`,
     };
   }
-  const loc = findStorageLocation(sklad);
-  const maintained = findStock(materialNumber, sklad);
-  if (!maintained) {
-    return {
-      outcome: "WAREHOUSE_ERROR",
-      light: "red",
-      message: `Materiál ${materialNumber} není veden ve skladu ${sklad} (${loc?.name}) – ověřte s DEK.`,
-    };
-  }
-  return { outcome: "OK", light: "neutral", message: `Sklad ${sklad} – ${loc?.name}.` };
-}
-
-// ── Availability (Zboží skladem?) – non-blocking, PRD §7 ──────────────────────
-export function checkAvailability(
-  materialNumber: string,
-  sklad: string,
-  qty: number,
-  uom: string,
-): CheckResult {
-  const conv = findUomConversion(materialNumber, uom) ?? 1;
-  const requestedBase = qty * conv;
-  const av = stockAvailability(materialNumber, sklad);
-  const available = av?.available ?? 0;
-  if (available >= requestedBase) {
-    return {
-      outcome: "IN_STOCK",
-      light: "green",
-      message: `Skladem ${available} ks ve skladu ${sklad} – pokračovat.`,
-      available,
-    };
-  }
-  return {
-    outcome: "OUT_OF_STOCK",
-    light: "amber",
-    message: `Nedostatek ve skladu ${sklad} (${available}/${requestedBase} ks) – upozornění na zpoždění do DEK, poté pokračovat.`,
-    available,
-  };
+  return { outcome: "OK", light: "neutral", message: `Sklad ${w} – ověřeno.` };
 }
 
 /**
- * Full per-line evaluation in the diagram order:
- *   article -> (blocking) ; quantity -> (blocking) ; warehouse -> (blocking) ;
- *   then availability (non-blocking stock status).
- * Returns the first blocking error, or the stock status if all checks pass.
+ * Full per-line evaluation: article → quantity → warehouse, all against the live
+ * Supabase catalogue. Returns the first error, or VALID when everything is recognised.
  */
 export function evaluateLine(
   materialNumber: string,
@@ -123,16 +70,23 @@ export function evaluateLine(
   uom: string,
   sklad: string,
 ): CheckResult {
+  if (!isCatalogLoaded()) {
+    return { outcome: "OK", light: "neutral", message: "Načítání katalogu z databáze…" };
+  }
   const article = checkMaterial(materialNumber);
   if (article.outcome !== "OK") return article;
 
-  const quantity = checkQty(materialNumber, qty, uom);
+  const quantity = checkQty(qty, uom);
   if (quantity.outcome !== "OK") return quantity;
 
-  const warehouse = checkWarehouse(materialNumber, sklad);
+  const warehouse = checkWarehouse(sklad);
   if (warehouse.outcome !== "OK") return warehouse;
 
-  return checkAvailability(materialNumber, sklad, qty, uom);
+  return {
+    outcome: "VALID",
+    light: "green",
+    message: `Materiál ${materialNumber.trim()} ověřen v katalogu – sklad ${sklad.trim()}, ${qty} ${uom}.`,
+  };
 }
 
 export const BLOCKING_OUTCOMES: ValidationOutcome[] = [
@@ -146,6 +100,7 @@ export const isBlocking = (o: ValidationOutcome) => BLOCKING_OUTCOMES.includes(o
 
 export const outcomeLight: Record<ValidationOutcome, LightColor> = {
   OK: "neutral",
+  VALID: "green",
   IN_STOCK: "green",
   OUT_OF_STOCK: "amber",
   SUCCESSOR: "amber",

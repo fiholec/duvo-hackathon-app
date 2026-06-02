@@ -61,6 +61,7 @@ export interface PoLine {
 /** our output table */
 export type ValidationOutcome =
   | "OK"
+  | "VALID"
   | "ARTICLE_NOT_FOUND"
   | "SUCCESSOR"
   | "QTY_ERROR"

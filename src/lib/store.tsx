@@ -16,6 +16,7 @@ import {
   generateRandomPo,
 } from "./mockData";
 import { evaluateLine, isBlocking, type CheckResult } from "./checks";
+import { findProduct, setCatalog } from "./catalog";
 import { loadPersisted, savePersisted } from "./persistence";
 import type {
   PurchaseOrder,
@@ -253,7 +254,7 @@ function reducer(state: State, action: Action & Meta): State {
         const next: WorkingLine = { ...l, [action.field]: action.value } as WorkingLine;
         if (action.field === "qty") next.qty = Number(action.value);
         if (action.field === "material_number") {
-          next.description = findMaterial(action.value)?.description ?? "";
+          next.description = findProduct(action.value)?.description ?? "";
         }
         return { ...next, entered: false, result: null }; // editing re-opens the line
       });
@@ -444,6 +445,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Load the product / warehouse catalogue from Supabase so validation hits the DB.
+  useEffect(() => {
+    fetch("/api/catalog", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && Array.isArray(d.products)) setCatalog(d);
+      })
+      .catch(() => {});
+  }, []);
+
   // Persist whenever the durable data changes (post-hydration only).
   useEffect(() => {
     if (!state.hydrated) return;
@@ -477,7 +488,7 @@ export function lineReady(l: WorkingLine): boolean {
   const o = l.result.outcome;
   // Submittable when in stock, or out of stock (reconciled in SAP later).
   // Errors (article/qty/warehouse/successor) must be fixed to green/amber first.
-  return o === "IN_STOCK" || o === "OUT_OF_STOCK";
+  return o === "VALID" || o === "IN_STOCK" || o === "OUT_OF_STOCK";
 }
 
 export function allLinesReady(lines: WorkingLine[]): boolean {
