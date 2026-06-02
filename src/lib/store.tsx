@@ -15,7 +15,6 @@ import {
   findMaterial,
   generateRandomPo,
   purchaseOrders,
-  poLines as seedLines,
 } from "./mockData";
 import { evaluateLine, isBlocking, type CheckResult } from "./checks";
 import { loadPersisted, savePersisted } from "./persistence";
@@ -75,6 +74,8 @@ type Action =
   | { type: "HYDRATE"; processedOrders: ProcessedOrderRecord[]; auditLog: AuditEvent[] }
   | { type: "LOAD_PO"; poNumber: string }
   | { type: "LOAD_RANDOM" }
+  | { type: "ADD_LINE" }
+  | { type: "DELETE_LINE"; line_no: number }
   | { type: "SET_FIELD"; line_no: number; field: keyof WorkingLine; value: string }
   | { type: "ENTER_LINE"; line_no: number }
   | { type: "SEND_DELAY_NOTICE"; line_no: number }
@@ -106,7 +107,7 @@ function toWorkingLines(lines: PoLine[]): WorkingLine[] {
 const initialState: State = {
   actor: "operator",
   po: purchaseOrders[0],
-  lines: toWorkingLines(seedLines),
+  lines: [], // start empty — operator adds rows manually from the PDF
   validationLog: [],
   actionLog: [],
   auditLog: [],
@@ -205,6 +206,30 @@ function reducer(state: State, action: Action & Meta): State {
         auditLog: withAudit({ ...state, po }, ts, actor, "order_loaded", null, `Náhodná objednávka ${po.po_number} načtena do SAP (ME21N).`),
       };
     }
+
+    case "ADD_LINE": {
+      const nextNo = state.lines.length
+        ? Math.max(...state.lines.map((l) => l.line_no)) + 10
+        : 10;
+      const blank: WorkingLine = {
+        line_no: nextNo,
+        material_number: "",
+        description: "",
+        qty: NaN,
+        uom: "",
+        sklad: "",
+        entered: false,
+        result: null,
+        delayNoticeSent: false,
+        verificationSent: false,
+        successorOffered: null,
+        resolved: false,
+      };
+      return { ...state, lines: [...state.lines, blank] };
+    }
+
+    case "DELETE_LINE":
+      return { ...state, lines: state.lines.filter((l) => l.line_no !== action.line_no) };
 
     case "SET_FIELD": {
       const lines = state.lines.map((l) => {
@@ -431,9 +456,9 @@ export function useDispatch() {
 export function lineReady(l: WorkingLine): boolean {
   if (!l.entered || !l.result) return false;
   const o = l.result.outcome;
-  if (o === "IN_STOCK") return true;
-  if (o === "OUT_OF_STOCK") return l.delayNoticeSent;
-  return false; // any blocking outcome
+  // Submittable when in stock, or out of stock (reconciled in SAP later).
+  // Errors (article/qty/warehouse/successor) must be fixed to green/amber first.
+  return o === "IN_STOCK" || o === "OUT_OF_STOCK";
 }
 
 export function allLinesReady(lines: WorkingLine[]): boolean {
