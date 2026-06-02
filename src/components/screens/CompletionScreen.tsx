@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useStore, useDispatch } from "@/lib/store";
 import { ActionLog } from "@/components/ActionLog";
 import { lightHex, outcomeLight } from "@/lib/checks";
@@ -7,6 +8,7 @@ import { lightHex, outcomeLight } from "@/lib/checks";
 export function CompletionScreen() {
   const { po, lines, validationLog } = useStore();
   const dispatch = useDispatch();
+  const router = useRouter();
   if (!po) return null;
 
   const confirmed = po.status === "confirmed";
@@ -78,7 +80,7 @@ export function CompletionScreen() {
         </span>
         {confirmed ? (
           <button
-            onClick={() => dispatch({ type: "GOTO", screen: "savings" })}
+            onClick={() => router.push("/savings")}
             className="rounded-sm bg-[var(--duvo-accent)] px-5 py-2 text-[13px] font-semibold text-white hover:brightness-110"
           >
             Zobrazit úsporu s duvo →

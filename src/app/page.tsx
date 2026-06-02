@@ -1,10 +1,6 @@
-import { StoreProvider } from "@/lib/store";
-import { SapShell } from "@/components/SapShell";
+import { redirect } from "next/navigation";
 
+// The workflow starts at the SAP order-entry screen.
 export default function Home() {
-  return (
-    <StoreProvider>
-      <SapShell />
-    </StoreProvider>
-  );
+  redirect("/order-entry");
 }

@@ -6,6 +6,7 @@ import {
   findUomConversion,
   findStorageLocation,
   findStock,
+  isKnownWarehouse,
   stockAvailability,
 } from "./mockData";
 import type { LightColor, ValidationOutcome } from "./types";
@@ -61,17 +62,26 @@ export function checkQty(materialNumber: string, qty: number, uom: string): Chec
 }
 
 // ── Warehouse check (Chyba v cílovém skladu) ──────────────────────────────────
+// Číslo skladu je proměnná z objednávky/DB. Nejprve ho ověříme proti kmenovým
+// datům skladů firmy, poté zkontrolujeme, že je tam materiál veden.
 export function checkWarehouse(materialNumber: string, sklad: string): CheckResult {
-  const loc = findStorageLocation(sklad);
-  const maintained = findStock(materialNumber, sklad);
-  if (!loc || !maintained) {
+  if (!isKnownWarehouse(sklad)) {
     return {
       outcome: "WAREHOUSE_ERROR",
       light: "red",
-      message: `Materiál ${materialNumber} není veden ve skladu ${sklad} – ověřte s DEK.`,
+      message: `Sklad ${sklad} není platným skladem firmy – ověřte s DEK.`,
     };
   }
-  return { outcome: "OK", light: "neutral", message: `Sklad ${sklad} – ${loc.name}.` };
+  const loc = findStorageLocation(sklad);
+  const maintained = findStock(materialNumber, sklad);
+  if (!maintained) {
+    return {
+      outcome: "WAREHOUSE_ERROR",
+      light: "red",
+      message: `Materiál ${materialNumber} není veden ve skladu ${sklad} (${loc?.name}) – ověřte s DEK.`,
+    };
+  }
+  return { outcome: "OK", light: "neutral", message: `Sklad ${sklad} – ${loc?.name}.` };
 }
 
 // ── Availability (Zboží skladem?) – non-blocking, PRD §7 ──────────────────────

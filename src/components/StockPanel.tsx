@@ -1,6 +1,6 @@
 "use client";
 
-import { findMaterial, findStock, findUomConversion, storageLocations, stock } from "@/lib/mockData";
+import { findMaterial, findUomConversion, storageLocations, stock } from "@/lib/mockData";
 
 /** MMBE-style stock display for one material across storage locations. */
 export function StockPanel({

@@ -31,21 +31,36 @@ export const materialUoms: MaterialUom[] = [
   { material_number: "2089117", uom: "KRT", conversion_to_base: 12 },
 ];
 
-// ── T001L ─────────────────────────────────────────────────────────────────────
+// ── T001L — kmenová data skladů firmy (platná čísla skladů) ───────────────────
+// Centrála používá tento systém pro každý sklad bez ohledu na město. Číslo skladu
+// v objednávce se ověřuje proti této množině; nic není natvrdo v logice.
 export const storageLocations: StorageLocation[] = [
-  { code: "54081", name: "Hlavní sklad Praha", plant: "5408" },
-  { code: "54082", name: "Sklad Brno", plant: "5408" },
-  { code: "54090", name: "Sklad Ostrava", plant: "5409" },
+  { code: "54081", name: "Sklad Praha", plant: "5408", city: "Praha" },
+  { code: "54082", name: "Sklad Brno", plant: "5408", city: "Brno" },
+  { code: "54090", name: "Sklad Ostrava", plant: "5409", city: "Ostrava" },
 ];
 
+/** Platná čísla skladů firmy, odvozená z kmenových dat (nikdy natvrdo). */
+export const companyWarehouses = storageLocations.map((s) => s.code);
+
+/** Výchozí cílový sklad firmy, převzatý z kmenových dat — ne magická konstanta. */
+export const DEFAULT_WAREHOUSE = storageLocations[0].code;
+
+/** Je to platné číslo skladu firmy? (kontrola platnosti, množina z DB) */
+export const isKnownWarehouse = (code: string) =>
+  companyWarehouses.includes(code.trim());
+
 // ── MARD ────────────────────────────────────────────────────────────────────
-// on_hand / reserved stored in BASE uom (KS).
+// on_hand / reserved stored in BASE uom (KS). Stock is maintained per warehouse;
+// a material can be stocked in some cities and not others.
 export const stock: Stock[] = [
   { material_number: "2452572", storage_location_code: "54081", on_hand: 12, reserved: 0 },
+  { material_number: "2452572", storage_location_code: "54082", on_hand: 6, reserved: 0 },
   { material_number: "2460956", storage_location_code: "54081", on_hand: 2, reserved: 0 }, // short
   { material_number: "2461299", storage_location_code: "54081", on_hand: 8, reserved: 0 }, // successor
   { material_number: "2127984", storage_location_code: "54081", on_hand: 25, reserved: 0 }, // = 1 BAL
   { material_number: "2153410", storage_location_code: "54081", on_hand: 40, reserved: 5 },
+  { material_number: "2153410", storage_location_code: "54090", on_hand: 15, reserved: 0 },
   { material_number: "2089117", storage_location_code: "54081", on_hand: 18, reserved: 0 },
   { material_number: "2024518", storage_location_code: "54081", on_hand: 600, reserved: 100 },
   // note: 2461264 (discontinued) has NO stock row -> not maintained anywhere
@@ -114,10 +129,12 @@ export function generateRandomPo(): { po: PurchaseOrder; lines: PoLine[] } {
   const n = (poSeq % 90000) + 10000;
   const po_number = `NO-540-26-${String(n).slice(0, 5)}`;
   const lineCount = 2 + (poSeq % 3); // 2-4 lines
+  // Target warehouse comes from the company master, not a hardcoded code.
+  const warehouse = DEFAULT_WAREHOUSE;
   const lines: PoLine[] = [];
   for (let i = 0; i < lineCount; i++) {
     const mat = cleanMaterials[(poSeq + i * 3) % cleanMaterials.length];
-    const avail = stockAvailability(mat.material_number, "54081");
+    const avail = stockAvailability(mat.material_number, warehouse);
     const maxQ = Math.max(1, Math.min(6, avail ? avail.available : 5));
     lines.push({
       po_number,
@@ -125,7 +142,7 @@ export function generateRandomPo(): { po: PurchaseOrder; lines: PoLine[] } {
       material_number: mat.material_number,
       qty: 1 + ((poSeq + i) % maxQ),
       uom: mat.base_uom,
-      target_storage_location: "54081",
+      target_storage_location: warehouse,
     });
   }
   const po: PurchaseOrder = {

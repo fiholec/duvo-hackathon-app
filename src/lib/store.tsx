@@ -3,8 +3,10 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useReducer,
-  type Dispatch,
+  useRef,
+  useCallback,
   type ReactNode,
 } from "react";
 import {
@@ -16,14 +18,16 @@ import {
   poLines as seedLines,
 } from "./mockData";
 import { evaluateLine, isBlocking, type CheckResult } from "./checks";
+import { loadPersisted, savePersisted } from "./persistence";
 import type {
   PurchaseOrder,
   PoLine,
   PoLineValidation,
   ValidationOutcome,
+  Actor,
+  AuditEvent,
+  ProcessedOrderRecord,
 } from "./types";
-
-export type Screen = "inbox" | "entry" | "completion" | "savings";
 
 /** A line being keyed into SAP. Working values are editable copies of the PoLine. */
 export interface WorkingLine {
@@ -49,22 +53,28 @@ export interface ActionLogEntry {
 }
 
 interface State {
-  screen: Screen;
+  actor: Actor;
   po: PurchaseOrder | null;
   lines: WorkingLine[];
-  pdfChecked: boolean;
   validationLog: PoLineValidation[]; // -> po_line_validation table
   actionLog: ActionLogEntry[];
+  auditLog: AuditEvent[]; // -> audit_log table (persisted)
+  processedOrders: ProcessedOrderRecord[]; // -> processed_order table (persisted)
   ordersCompleted: number;
-  seq: number;
+  hydrated: boolean;
+}
+
+/** Meta is injected by the dispatch wrapper: real timestamp + the current actor. */
+interface Meta {
+  ts?: string;
+  actor?: Actor;
 }
 
 type Action =
-  | { type: "GOTO"; screen: Screen }
+  | { type: "SET_ACTOR"; actor: Actor }
+  | { type: "HYDRATE"; processedOrders: ProcessedOrderRecord[]; auditLog: AuditEvent[] }
   | { type: "LOAD_PO"; poNumber: string }
   | { type: "LOAD_RANDOM" }
-  | { type: "CHECK_PDF" }
-  | { type: "START_ENTRY" }
   | { type: "SET_FIELD"; line_no: number; field: keyof WorkingLine; value: string }
   | { type: "ENTER_LINE"; line_no: number }
   | { type: "SEND_DELAY_NOTICE"; line_no: number }
@@ -74,13 +84,7 @@ type Action =
   | { type: "CONFIRM_ORDER" }
   | { type: "RESET" };
 
-const clock = (seq: number) => {
-  // Deterministic faux timestamps (avoid Date.now hydration drift). 08:00 + seq min.
-  const base = 8 * 60 + seq;
-  const h = Math.floor(base / 60) % 24;
-  const m = base % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-};
+const hhmmss = (ts: string) => (ts.length >= 19 ? ts.slice(11, 19) : ts);
 
 function toWorkingLines(lines: PoLine[]): WorkingLine[] {
   return lines.map((l) => ({
@@ -100,83 +104,106 @@ function toWorkingLines(lines: PoLine[]): WorkingLine[] {
 }
 
 const initialState: State = {
-  screen: "inbox",
+  actor: "operator",
   po: purchaseOrders[0],
   lines: toWorkingLines(seedLines),
-  pdfChecked: false,
   validationLog: [],
   actionLog: [],
+  auditLog: [],
+  processedOrders: [],
   ordersCompleted: 0,
-  seq: 0,
+  hydrated: false,
 };
 
-function logAction(
+// ── log builders (pure; timestamp comes in via the action) ────────────────────
+function withAction(
   state: State,
+  ts: string,
   channel: ActionLogEntry["channel"],
   text: string,
-): { actionLog: ActionLogEntry[]; seq: number } {
-  const seq = state.seq + 1;
-  return {
-    seq,
-    actionLog: [...state.actionLog, { id: seq, time: clock(seq), channel, text }],
-  };
+): ActionLogEntry[] {
+  return [...state.actionLog, { id: state.actionLog.length + 1, time: hhmmss(ts), channel, text }];
 }
 
-function logValidation(
+function withAudit(
   state: State,
+  ts: string,
+  actor: Actor,
+  type: AuditEvent["type"],
+  line_no: number | null,
+  message: string,
+): AuditEvent[] {
+  return [
+    ...state.auditLog,
+    {
+      id: state.auditLog.length + 1,
+      ts,
+      actor,
+      type,
+      po_number: state.po?.po_number ?? "",
+      line_no,
+      message,
+    },
+  ];
+}
+
+function withValidation(
+  state: State,
+  ts: string,
   line_no: number,
   outcome: ValidationOutcome,
   detail: string,
 ): PoLineValidation[] {
   return [
     ...state.validationLog,
-    {
-      po_number: state.po?.po_number ?? "",
-      line_no,
-      outcome,
-      detail,
-      created_at: clock(state.seq + 1),
-    },
+    { po_number: state.po?.po_number ?? "", line_no, outcome, detail, created_at: hhmmss(ts) },
   ];
 }
 
-function reducer(state: State, action: Action): State {
+/** Reset only the per-order working fields; cross-order logs/queue persist. */
+function freshOrder(po: PurchaseOrder, lines: PoLine[]) {
+  return {
+    po,
+    lines: toWorkingLines(lines),
+    validationLog: [] as PoLineValidation[],
+    actionLog: [] as ActionLogEntry[],
+  };
+}
+
+function reducer(state: State, action: Action & Meta): State {
+  const ts = action.ts ?? "1970-01-01T00:00:00.000Z";
+  const actor = action.actor ?? state.actor;
+
   switch (action.type) {
-    case "GOTO":
-      return { ...state, screen: action.screen };
+    case "SET_ACTOR":
+      return { ...state, actor: action.actor };
+
+    case "HYDRATE":
+      return {
+        ...state,
+        processedOrders: action.processedOrders,
+        auditLog: action.auditLog,
+        hydrated: true,
+      };
 
     case "LOAD_PO": {
       const po = getPo(action.poNumber);
       if (!po) return state;
       return {
-        ...initialState,
-        po,
-        lines: toWorkingLines(getPoLines(action.poNumber)),
-        ordersCompleted: state.ordersCompleted,
-        seq: state.seq,
+        ...state,
+        ...freshOrder(po, getPoLines(action.poNumber)),
+        auditLog: withAudit({ ...state, po }, ts, actor, "order_loaded", null, `Objednávka ${po.po_number} načtena do SAP (ME21N).`),
       };
     }
 
     case "LOAD_RANDOM": {
       const { po, lines } = generateRandomPo();
+      const fresh = freshOrder(po, lines);
       return {
-        ...initialState,
-        po,
-        lines: toWorkingLines(lines),
-        ordersCompleted: state.ordersCompleted,
-        seq: state.seq,
+        ...state,
+        ...fresh,
+        auditLog: withAudit({ ...state, po }, ts, actor, "order_loaded", null, `Náhodná objednávka ${po.po_number} načtena do SAP (ME21N).`),
       };
-    }
-
-    case "CHECK_PDF": {
-      const a = logAction(state, "system", `Manuální kontrola PDF objednávky ${state.po?.po_number} dokončena – V pořádku? ANO.`);
-      return { ...state, pdfChecked: true, ...a };
-    }
-
-    case "START_ENTRY": {
-      const po = state.po ? { ...state.po, status: "in_entry" as const } : null;
-      const a = logAction(state, "system", `Zahájeno manuální zadání do SAP (ME21N) – ${po?.po_number}.`);
-      return { ...state, po, screen: "entry", ...a };
     }
 
     case "SET_FIELD": {
@@ -187,8 +214,7 @@ function reducer(state: State, action: Action): State {
         if (action.field === "material_number") {
           next.description = findMaterial(action.value)?.description ?? "";
         }
-        // editing a field re-opens the line
-        return { ...next, entered: false, result: null };
+        return { ...next, entered: false, result: null }; // editing re-opens the line
       });
       return { ...state, lines };
     }
@@ -197,7 +223,6 @@ function reducer(state: State, action: Action): State {
       const line = state.lines.find((l) => l.line_no === action.line_no);
       if (!line) return state;
       const result = evaluateLine(line.material_number, line.qty, line.uom, line.sklad);
-      const validationLog = logValidation(state, action.line_no, result.outcome, result.message);
       const wasBlocking = line.result ? isBlocking(line.result.outcome) : false;
       const lines = state.lines.map((l) =>
         l.line_no === action.line_no
@@ -206,28 +231,42 @@ function reducer(state: State, action: Action): State {
               entered: true,
               result,
               successorOffered: result.successor ?? null,
-              // resolved if a previously blocking line now clears the blocking checks
               resolved: wasBlocking && !isBlocking(result.outcome),
             }
           : l,
       );
-      return { ...state, lines, validationLog };
+      return {
+        ...state,
+        lines,
+        validationLog: withValidation(state, ts, action.line_no, result.outcome, result.message),
+        auditLog: withAudit(
+          state,
+          ts,
+          actor,
+          "line_entered",
+          action.line_no,
+          `Řádek ${action.line_no} zadán: ${line.material_number}, ${line.qty} ${line.uom}, sklad ${line.sklad} → ${result.outcome}.`,
+        ),
+      };
     }
 
     case "SEND_DELAY_NOTICE": {
       const line = state.lines.find((l) => l.line_no === action.line_no);
-      const a = logAction(state, "email", `Upozornění na zpoždění odesláno do DEK – pozice ${action.line_no} (${line?.material_number}).`);
       const lines = state.lines.map((l) =>
         l.line_no === action.line_no ? { ...l, delayNoticeSent: true } : l,
       );
-      return { ...state, lines, ...a };
+      return {
+        ...state,
+        lines,
+        actionLog: withAction(state, ts, "email", `Upozornění na zpoždění odesláno do DEK – pozice ${action.line_no} (${line?.material_number}).`),
+        auditLog: withAudit(state, ts, actor, "delay_notice", action.line_no, `Upozornění na zpoždění do DEK – pozice ${action.line_no}.`),
+      };
     }
 
     case "ACCEPT_SUCCESSOR": {
       const line = state.lines.find((l) => l.line_no === action.line_no);
       if (!line?.successorOffered) return state;
       const succ = line.successorOffered;
-      const a = logAction(state, "email", `Oznámení o změně na nástupce ${succ} odesláno do DEK – po odsouhlasení přepis do SAP (pozice ${action.line_no}).`);
       const lines = state.lines.map((l) =>
         l.line_no === action.line_no
           ? {
@@ -239,35 +278,81 @@ function reducer(state: State, action: Action): State {
             }
           : l,
       );
-      return { ...state, lines, ...a };
+      return {
+        ...state,
+        lines,
+        actionLog: withAction(state, ts, "email", `Oznámení o změně na nástupce ${succ} odesláno do DEK – po odsouhlasení přepis do SAP (pozice ${action.line_no}).`),
+        auditLog: withAudit(state, ts, actor, "successor_accepted", action.line_no, `Převzat nástupce ${succ} – pozice ${action.line_no}, oznámeno DEK.`),
+      };
     }
 
     case "VERIFY_DEK": {
       const line = state.lines.find((l) => l.line_no === action.line_no);
-      const a = logAction(state, "phone", `Manuální ověření (mail/telefon) s DEK – pozice ${action.line_no} (${line?.material_number}). Po odsouhlasení přepis do SAP.`);
       const lines = state.lines.map((l) =>
         l.line_no === action.line_no ? { ...l, verificationSent: true } : l,
       );
-      return { ...state, lines, ...a };
+      return {
+        ...state,
+        lines,
+        actionLog: withAction(state, ts, "phone", `Manuální ověření (mail/telefon) s DEK – pozice ${action.line_no} (${line?.material_number}). Po odsouhlasení přepis do SAP.`),
+        auditLog: withAudit(state, ts, actor, "dek_verification", action.line_no, `Ověření s DEK – pozice ${action.line_no}.`),
+      };
     }
 
     case "COMPLETE_ORDER": {
-      const po = state.po ? { ...state.po, status: "completed" as const } : null;
-      const a = logAction(state, "system", `Objednávka ${po?.po_number} dokončena v SAP.`);
-      return { ...state, po, screen: "completion", ...a };
+      if (!state.po) return state;
+      const po = { ...state.po, status: "completed" as const };
+      const record: ProcessedOrderRecord = {
+        po_number: po.po_number,
+        supplier: po.supplier,
+        customer: po.customer,
+        actor,
+        completed_at: ts,
+        confirmed_at: null,
+        status: "completed",
+        line_count: state.lines.length,
+        lines: state.lines.map((l) => ({
+          line_no: l.line_no,
+          material_number: l.material_number,
+          description: l.description,
+          qty: l.qty,
+          uom: l.uom,
+          sklad: l.sklad,
+          outcome: l.result?.outcome ?? "OK",
+        })),
+      };
+      return {
+        ...state,
+        po,
+        processedOrders: [record, ...state.processedOrders.filter((p) => p.po_number !== po.po_number)],
+        actionLog: withAction(state, ts, "system", `Objednávka ${po.po_number} dokončena v SAP.`),
+        auditLog: withAudit(state, ts, actor, "order_completed", null, `Objednávka ${po.po_number} dokončena v SAP (${state.lines.length} pozic).`),
+      };
     }
 
     case "CONFIRM_ORDER": {
-      const po = state.po ? { ...state.po, status: "confirmed" as const } : null;
-      const a = logAction(state, "email", `Potvrzení objednávky ${po?.po_number} odesláno do DEK. Proces ukončen.`);
-      return { ...state, po, ordersCompleted: state.ordersCompleted + 1, ...a };
+      if (!state.po) return state;
+      const po = { ...state.po, status: "confirmed" as const };
+      return {
+        ...state,
+        po,
+        ordersCompleted: state.ordersCompleted + 1,
+        processedOrders: state.processedOrders.map((p) =>
+          p.po_number === po.po_number ? { ...p, status: "confirmed" as const, confirmed_at: ts } : p,
+        ),
+        actionLog: withAction(state, ts, "email", `Potvrzení objednávky ${po.po_number} odesláno do DEK. Proces ukončen.`),
+        auditLog: withAudit(state, ts, actor, "order_confirmed", null, `Potvrzení objednávky ${po.po_number} odesláno do DEK – proces ukončen.`),
+      };
     }
 
     case "RESET":
       return {
         ...initialState,
+        actor: state.actor,
+        auditLog: state.auditLog,
+        processedOrders: state.processedOrders,
         ordersCompleted: state.ordersCompleted,
-        seq: state.seq,
+        hydrated: state.hydrated,
       };
 
     default:
@@ -276,10 +361,42 @@ function reducer(state: State, action: Action): State {
 }
 
 const StateCtx = createContext<State | null>(null);
-const DispatchCtx = createContext<Dispatch<Action> | null>(null);
+type WrappedDispatch = (action: Action) => void;
+const DispatchCtx = createContext<WrappedDispatch | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, rawDispatch] = useReducer(reducer, initialState);
+
+  // Keep the latest actor in a ref so the dispatch wrapper stays stable.
+  const actorRef = useRef<Actor>(state.actor);
+  useEffect(() => {
+    actorRef.current = state.actor;
+  }, [state.actor]);
+
+  // Inject real timestamp + current actor into every dispatched action.
+  const dispatch = useCallback<WrappedDispatch>((action) => {
+    rawDispatch({ ...action, ts: new Date().toISOString(), actor: actorRef.current });
+  }, []);
+
+  // Detect a browser-automation agent (duvo) driving the form.
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.webdriver) {
+      rawDispatch({ type: "SET_ACTOR", actor: "duvo-agent" });
+    }
+  }, []);
+
+  // Hydrate persisted state (processed orders + audit log) after mount.
+  useEffect(() => {
+    const p = loadPersisted();
+    rawDispatch({ type: "HYDRATE", processedOrders: p.processedOrders, auditLog: p.auditLog });
+  }, []);
+
+  // Persist whenever the durable data changes (post-hydration only).
+  useEffect(() => {
+    if (!state.hydrated) return;
+    savePersisted({ processedOrders: state.processedOrders, auditLog: state.auditLog });
+  }, [state.processedOrders, state.auditLog, state.hydrated]);
+
   return (
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={dispatch}>{children}</DispatchCtx.Provider>

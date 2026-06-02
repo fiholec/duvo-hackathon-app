@@ -19,11 +19,16 @@ export interface MaterialUom {
   conversion_to_base: number; // 1 BAL = 25 KS -> 25
 }
 
-/** T001L */
+/**
+ * T001L — the company warehouse master. This is the source of truth for which
+ * warehouse numbers are valid. The set is provided by the company / DB, not baked
+ * into the app: HQ operates every warehouse here regardless of its city.
+ */
 export interface StorageLocation {
-  code: string; // e.g. "54081"
+  code: string; // warehouse number, e.g. "54081" — variable, validated against this master
   name: string;
   plant: string;
+  city: string;
 }
 
 /** MARD */
@@ -79,3 +84,52 @@ export interface StockAvailability {
 }
 
 export type LightColor = "green" | "amber" | "red" | "neutral";
+
+/** Who performed an action: a human operator, or the duvo browser-automation agent. */
+export type Actor = "operator" | "duvo-agent";
+
+/**
+ * Comprehensive audit trail. Every meaningful event in the workflow lands here with
+ * an actor + timestamp. This maps to an `audit_log` table when the DB is wired up.
+ */
+export interface AuditEvent {
+  id: number;
+  ts: string; // ISO timestamp
+  actor: Actor;
+  type:
+    | "order_loaded"
+    | "pdf_checked"
+    | "entry_started"
+    | "line_entered"
+    | "delay_notice"
+    | "successor_accepted"
+    | "dek_verification"
+    | "order_completed"
+    | "order_confirmed";
+  po_number: string;
+  line_no: number | null;
+  message: string;
+}
+
+export interface ProcessedOrderLine {
+  line_no: number;
+  material_number: string;
+  description: string;
+  qty: number;
+  uom: string;
+  sklad: string;
+  outcome: ValidationOutcome;
+}
+
+/** A finished order, as it appears in the processed-orders queue (the duvo agent's output). */
+export interface ProcessedOrderRecord {
+  po_number: string;
+  supplier: string;
+  customer: string;
+  actor: Actor;
+  completed_at: string; // ISO
+  confirmed_at: string | null; // ISO
+  status: "completed" | "confirmed";
+  line_count: number;
+  lines: ProcessedOrderLine[];
+}

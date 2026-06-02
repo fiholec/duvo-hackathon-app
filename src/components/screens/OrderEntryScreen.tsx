@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   useStore,
   useDispatch,
@@ -43,6 +44,7 @@ function LineActions({ line }: { line: WorkingLine }) {
       <span className="text-[11px] font-medium text-amber-700">✓ Zpoždění oznámeno</span>
     ) : (
       <button
+        data-testid={`delay-${line.line_no}`}
         onClick={() => dispatch({ type: "SEND_DELAY_NOTICE", line_no: line.line_no })}
         className="rounded-sm bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:brightness-110"
       >
@@ -53,6 +55,7 @@ function LineActions({ line }: { line: WorkingLine }) {
   if (o === "SUCCESSOR") {
     return (
       <button
+        data-testid={`successor-${line.line_no}`}
         onClick={() => dispatch({ type: "ACCEPT_SUCCESSOR", line_no: line.line_no })}
         className="rounded-sm bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:brightness-110"
       >
@@ -67,6 +70,7 @@ function LineActions({ line }: { line: WorkingLine }) {
     </span>
   ) : (
     <button
+      data-testid={`verify-${line.line_no}`}
       onClick={() => dispatch({ type: "VERIFY_DEK", line_no: line.line_no })}
       className="rounded-sm bg-red-600 px-2 py-1 text-[11px] font-medium text-white hover:brightness-110"
     >
@@ -78,6 +82,7 @@ function LineActions({ line }: { line: WorkingLine }) {
 export function OrderEntryScreen() {
   const { po, lines } = useStore();
   const dispatch = useDispatch();
+  const router = useRouter();
   const [selected, setSelected] = useState<number>(lines[0]?.line_no ?? 0);
   if (!po) return null;
 
@@ -99,6 +104,22 @@ export function OrderEntryScreen() {
         <span className="text-slate-700">{po.customer}</span>
         <span className="text-slate-500">Dodání:</span>
         <span className="text-slate-700">{po.requested_delivery_date}</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            data-testid="load-demo"
+            onClick={() => dispatch({ type: "LOAD_PO", poNumber: "NO-540-26-01605" })}
+            className="rounded-sm border border-slate-300 bg-white px-3 py-1 text-[11px] text-slate-700 transition hover:bg-slate-50"
+          >
+            Načíst demo objednávku
+          </button>
+          <button
+            data-testid="load-random"
+            onClick={() => dispatch({ type: "LOAD_RANDOM" })}
+            className="rounded-sm border border-slate-300 bg-white px-3 py-1 text-[11px] text-slate-700 transition hover:bg-slate-50"
+          >
+            🎲 Načíst náhodnou objednávku
+          </button>
+        </div>
       </div>
 
       {/* Line-item grid */}
@@ -133,6 +154,10 @@ export function OrderEntryScreen() {
                   </td>
                   <td className="border-r border-[var(--sap-grid-line)] px-2 py-1">
                     <input
+                      data-testid={`material-${l.line_no}`}
+                      data-field="material_number"
+                      data-line={l.line_no}
+                      name={`material_${l.line_no}`}
                       value={l.material_number}
                       onChange={(e) => set(l.line_no, "material_number", e.target.value)}
                       className="sap-input w-24 font-mono"
@@ -144,6 +169,10 @@ export function OrderEntryScreen() {
                   <td className="border-r border-[var(--sap-grid-line)] px-2 py-1 text-right">
                     <input
                       type="number"
+                      data-testid={`qty-${l.line_no}`}
+                      data-field="qty"
+                      data-line={l.line_no}
+                      name={`qty_${l.line_no}`}
                       value={Number.isNaN(l.qty) ? "" : l.qty}
                       onChange={(e) => set(l.line_no, "qty", e.target.value)}
                       className="sap-input w-16 text-right"
@@ -151,6 +180,10 @@ export function OrderEntryScreen() {
                   </td>
                   <td className="border-r border-[var(--sap-grid-line)] px-2 py-1">
                     <input
+                      data-testid={`uom-${l.line_no}`}
+                      data-field="uom"
+                      data-line={l.line_no}
+                      name={`uom_${l.line_no}`}
                       value={l.uom}
                       onChange={(e) => set(l.line_no, "uom", e.target.value)}
                       className="sap-input w-14 uppercase"
@@ -158,6 +191,10 @@ export function OrderEntryScreen() {
                   </td>
                   <td className="border-r border-[var(--sap-grid-line)] px-2 py-1">
                     <input
+                      data-testid={`sklad-${l.line_no}`}
+                      data-field="sklad"
+                      data-line={l.line_no}
+                      name={`sklad_${l.line_no}`}
                       value={l.sklad}
                       onChange={(e) => set(l.line_no, "sklad", e.target.value)}
                       className="sap-input w-16 font-mono"
@@ -165,6 +202,7 @@ export function OrderEntryScreen() {
                   </td>
                   <td className="border-r border-[var(--sap-grid-line)] px-2 py-1 text-center">
                     <button
+                      data-testid={`enter-${l.line_no}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelected(l.line_no);
@@ -214,8 +252,12 @@ export function OrderEntryScreen() {
             : "Zadejte a vyřešte všechny řádky (skladem, nebo s oznámeným zpožděním)."}
         </span>
         <button
+          data-testid="complete-order"
           disabled={!ready}
-          onClick={() => dispatch({ type: "COMPLETE_ORDER" })}
+          onClick={() => {
+            dispatch({ type: "COMPLETE_ORDER" });
+            router.push("/completion");
+          }}
           className={`rounded-sm px-5 py-2 text-[13px] font-semibold text-white transition ${
             ready
               ? "bg-[var(--duvo-accent)] hover:brightness-110"

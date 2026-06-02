@@ -13,7 +13,7 @@ export function StatusBar() {
   const color = last ? outcomeLight[last.outcome] : "neutral";
   const message = last
     ? last.detail
-    : "Připraveno. Zadejte transakci nebo zkontrolujte PDF objednávku.";
+    : "Připraveno. Zadejte transakci nebo zkontrolujte objednávku.";
 
   return (
     <footer className="border-t border-[var(--sap-grid-line)] bg-[var(--sap-statusbar)] px-3 py-1.5">
