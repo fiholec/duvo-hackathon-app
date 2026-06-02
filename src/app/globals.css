@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+:root {
+  --background: #d4dce4; /* classic SAP GUI desktop grey-blue */
+  --foreground: #1a1f24;
+
+  /* SAP look tokens */
+  --sap-toolbar: #355068;
+  --sap-toolbar-2: #2a3f52;
+  --sap-field: #ffffff;
+  --sap-field-border: #8aa0b5;
+  --sap-header: #eef2f6;
+  --sap-grid-line: #c2cdd8;
+  --sap-grid-head: #c3d0dc;
+  --sap-statusbar: #e9edf1;
+
+  /* duvo brand (calculator / value layer) */
+  --duvo-ink: #0b1f3a;
+  --duvo-accent: #00c389; /* emerald = savings */
+  --duvo-accent-2: #1f6feb;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-sap-toolbar: var(--sap-toolbar);
+  --color-sap-field: var(--sap-field);
+  --color-duvo-ink: var(--duvo-ink);
+  --color-duvo-accent: var(--duvo-accent);
+  --color-duvo-accent-2: var(--duvo-accent-2);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font-family: var(--font-sans), "Segoe UI", Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* SAP fields: square, thin, inset */
+.sap-input {
+  background: var(--sap-field);
+  border: 1px solid var(--sap-field-border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+}
+.sap-input:focus {
+  border-color: var(--duvo-accent-2);
+  box-shadow: 0 0 0 1px var(--duvo-accent-2);
+}
+.sap-input:disabled {
+  background: #eef1f4;
+  color: #5b6b7a;
+}
+
+/* blinking status light */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.light-pulse { animation: pulse-soft 1.4s ease-in-out infinite; }
