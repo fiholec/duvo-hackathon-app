@@ -1,11 +1,9 @@
-// Persistence layer. Browser localStorage today; the SINGLE place to swap for
-// SQLite or Supabase later. The duvo backend (browser-automation agent) drives the
-// UI and the resulting processed orders + audit log are persisted here.
+// Persistence layer — now backed by Supabase via the /api/persistence route
+// (was browser localStorage). load -> GET, save -> POST. The route uses the
+// service-role key server-side, so the secret never reaches the browser.
 //
-// To move to a real DB:
-//   - replace load/save below with fetch() calls to API routes (app/api/*), OR
-//   - read/write Supabase tables `processed_order`, `processed_order_line`, `audit_log`.
-// Nothing else in the app needs to change.
+// The duvo backend (browser-automation agent) drives the UI; the resulting
+// processed orders + audit log are persisted here, shared across sessions.
 
 import type { AuditEvent, ProcessedOrderRecord } from "./types";
 
@@ -14,16 +12,14 @@ export interface PersistedState {
   auditLog: AuditEvent[];
 }
 
-const STORAGE_KEY = "duvo-sap-mockup:v1";
-
 const empty: PersistedState = { processedOrders: [], auditLog: [] };
 
-export function loadPersisted(): PersistedState {
+export async function loadPersisted(): Promise<PersistedState> {
   if (typeof window === "undefined") return empty;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return empty;
-    const parsed = JSON.parse(raw) as Partial<PersistedState>;
+    const res = await fetch("/api/persistence", { cache: "no-store" });
+    if (!res.ok) return empty;
+    const parsed = (await res.json()) as Partial<PersistedState>;
     return {
       processedOrders: parsed.processedOrders ?? [],
       auditLog: parsed.auditLog ?? [],
@@ -33,20 +29,15 @@ export function loadPersisted(): PersistedState {
   }
 }
 
-export function savePersisted(state: PersistedState): void {
+export async function savePersisted(state: PersistedState): Promise<void> {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    await fetch("/api/persistence", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(state),
+    });
   } catch {
-    /* quota / private mode — ignore for the demo */
-  }
-}
-
-export function clearPersisted(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore */
+    /* network / quota — ignore for the demo */
   }
 }

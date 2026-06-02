@@ -386,9 +386,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Hydrate persisted state (processed orders + audit log) after mount.
+  // loadPersisted is async now (Supabase via /api/persistence); guard against
+  // a dispatch after unmount.
   useEffect(() => {
-    const p = loadPersisted();
-    rawDispatch({ type: "HYDRATE", processedOrders: p.processedOrders, auditLog: p.auditLog });
+    let cancelled = false;
+    loadPersisted().then((p) => {
+      if (!cancelled) {
+        rawDispatch({ type: "HYDRATE", processedOrders: p.processedOrders, auditLog: p.auditLog });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Persist whenever the durable data changes (post-hydration only).
